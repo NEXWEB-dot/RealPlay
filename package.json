@@ -1,0 +1,31 @@
+{
+  "name": "realplay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "REALPLAY — your phone is the racket. 3D table tennis with phone-motion controllers (Phase 1: setup, lobby, controller streaming, split-screen debug view).",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "node server/index.js --port 8081",
+    "dev:client": "vite --port 5173",
+    "dev:https": "cross-env RP_HTTPS=1 concurrently -k -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:client:https\"",
+    "dev:client:https": "cross-env RP_HTTPS=1 vite --port 5173",
+    "build": "vite build",
+    "start": "node server/index.js --port 8080 --static dist",
+    "smoke": "node server/smoke.js"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "three": "^0.180.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "vite": "^5.4.11"
+  },
+  "engines": {
+    "node": ">=18.17"
+  }
+}

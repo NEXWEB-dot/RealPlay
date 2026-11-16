@@ -1,0 +1,202 @@
+/* REALPLAY phone controller — dark, minimal, thumb-friendly. */
+
+:root {
+  --bg: #0b0e14;
+  --panel: #141922;
+  --line: #232b38;
+  --text: #e8edf5;
+  --dim: #8b96a8;
+  --accent: #ff8a1e;
+  --good: #35d07f;
+  --bad: #ff5d5d;
+  --blue: #2f7cff;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#app { height: 100%; }
+
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: calc(env(safe-area-inset-top) + 8px) 12px calc(env(safe-area-inset-bottom) + 10px);
+}
+
+.hidden { display: none !important; }
+
+/* ---------- connect screen ---------- */
+
+#screen-connect { align-items: center; justify-content: center; }
+
+.connect-card {
+  width: min(92vw, 380px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 26px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.logo { font-size: 34px; font-weight: 800; letter-spacing: 2px; }
+.logo span { color: var(--accent); }
+.tag { color: var(--dim); font-size: 13px; margin-bottom: 10px; }
+
+.connect-card label { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+
+input {
+  background: #0d1117;
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 20px;
+  letter-spacing: 6px;
+  text-align: center;
+  outline: none;
+}
+#name-input { font-size: 15px; letter-spacing: 1px; text-align: left; }
+
+.hint { color: var(--dim); font-size: 12px; text-align: center; margin-top: 6px; }
+.error { color: var(--bad); font-size: 13px; text-align: center; }
+
+/* ---------- buttons ---------- */
+
+.btn {
+  background: #1b2230;
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 1px;
+  border-radius: 12px;
+  padding: 13px 10px;
+  touch-action: manipulation;
+}
+.btn:active { transform: scale(0.97); filter: brightness(1.25); }
+.btn.primary { background: var(--accent); border-color: transparent; color: #201204; }
+.btn.danger { background: #2a1414; border-color: #5b2020; color: #ff9d9d; }
+.btn.big { font-size: 17px; padding: 17px 10px; }
+.btn:disabled { opacity: 0.45; }
+
+/* ---------- play screen ---------- */
+
+#screen-play { gap: 8px; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.badge {
+  background: var(--blue);
+  color: #fff;
+  font-weight: 800;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 15px;
+}
+.topstats { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.chip {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.chip.sens.on { color: var(--good); border-color: #1d5c40; }
+.chip.sens { color: var(--bad); border-color: #5b2020; }
+
+.statuswrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 0; }
+.status-main { font-size: clamp(22px, 6vw, 34px); font-weight: 800; text-align: center; padding: 0 10px; }
+.status-main.good { color: var(--good); }
+.status-main.bad { color: var(--bad); }
+.status-main.accent { color: var(--accent); }
+.status-sub { color: var(--dim); font-size: 13px; text-align: center; padding: 0 14px; }
+
+/* ---------- touchpad ---------- */
+
+.pad {
+  position: relative;
+  height: 30vh;
+  min-height: 140px;
+  background: radial-gradient(circle at 50% 50%, #131a26 0%, #0d1117 70%);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  overflow: hidden;
+  touch-action: none;
+}
+.pad-knob {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 64px; height: 64px;
+  margin: -32px 0 0 -32px;
+  border-radius: 50%;
+  background: rgba(47, 124, 255, 0.35);
+  border: 2px solid rgba(47, 124, 255, 0.8);
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+.pad.active .pad-knob { opacity: 1; background: rgba(47, 124, 255, 0.6); }
+.pad-label {
+  position: absolute; right: 10px; bottom: 8px;
+  color: #35405280; font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+}
+
+/* ---------- bottom row ---------- */
+
+.btnrow { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; }
+
+/* ---------- gates ---------- */
+
+.gate {
+  position: absolute; inset: 0;
+  background: rgba(5, 7, 13, 0.82);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 30;
+}
+.gate-card {
+  width: min(88vw, 360px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 24px 20px;
+  text-align: center;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.gate-title { font-size: 22px; font-weight: 800; }
+.gate-card p { color: var(--dim); font-size: 13px; line-height: 1.5; margin: 0; }
+.gate-card code { color: var(--accent); }
+
+/* ---------- toast ---------- */
+
+.toast {
+  position: absolute;
+  left: 50%; bottom: calc(env(safe-area-inset-bottom) + 86px);
+  transform: translateX(-50%);
+  background: #1b2230ee;
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 13px;
+  z-index: 40;
+  transition: opacity 0.25s;
+  white-space: nowrap;
+}
