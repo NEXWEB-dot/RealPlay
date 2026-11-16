@@ -2,7 +2,7 @@
 
 3D table tennis in the browser (Three.js + Vite) with **phones as motion controllers** over a Node.js WebSocket server. Modular core so padel/badminton and bots slot in later.
 
-**Current status: Phase 4 complete** — Phase 1 (setup, lobby, phone controller with sensor streaming + calibration, split-screen debug view), Phase 2 (real ball physics at a fixed 240 Hz step: gravity, quadratic drag, Magnus lift, spin-transfer bounces, net + net cord, floor, swept-sphere CCD; ball-machine **practice mode**), Phase 3 (**racket-ball hit model**: swept racket contact at 240 Hz with rubber restitution/friction, sweet-spot falloff, phone-swing smash boost, HIT/SMASH/SWEET/EDGE popups, plus **assisted rallies** — Settings ▸ Assist: off/low/medium/high) and Phase 4 (**singles match**: swing to serve, ITTF serve rotation — every 2 points, every point at deuce — bounce-order + volley legality, lets, real scoring with win-by-2, live scoreboard with serve dot and game-point glow, banners, end screen, rematch with server swap).
+**Current status: Phase 4 + Stage B complete** — Phase 1 (setup, lobby, phone controller with sensor streaming + calibration, split-screen debug view), Phase 2 (real ball physics at a fixed 240 Hz step: gravity, quadratic drag, Magnus lift, spin-transfer bounces, net + net cord, floor, swept-sphere CCD; ball-machine **practice mode**), Phase 3 (**racket-ball hit model**: swept racket contact at 240 Hz with rubber restitution/friction, sweet-spot falloff, phone-swing smash boost, HIT/SMASH/SWEET/EDGE popups, plus **assisted rallies** — Settings ▸ Assist: off/low/medium/high), Phase 4 (**singles match**: swing to serve, ITTF serve rotation — every 2 points, every point at deuce — bounce-order + volley legality, lets, real scoring with win-by-2, live scoreboard with serve dot and game-point glow, banners, end screen, rematch with server swap) and Stage B (**hand-motion positioning**: the phone's physical motion moves the racket via a leaky double integration + ZUPT stillness snap — holding still never drifts — with per-player positioning modes and an automatic tilt-only fallback for gyro-less phones).
 
 ---
 
@@ -42,7 +42,7 @@ Production mode: everything on `http://<pc-ip>:8080`.
 4. Tap **CALIBRATE** while holding the phone like a racket, screen facing the "opponent". The PC half for that player shows **CALIBRATED ✓** and the racket follows your hand in real time.
 5. Use **FULLSCREEN** on the phone (locks portrait on Android; Wake Lock keeps the screen on).
 6. Player 2 joins the same way (second phone or the same page in another tab).
-7. In the PC debug view: left half = P1, right half = P2. Unconnected halves show a scripted **DEMO** racket. Press **Test buzz** in the lobby to verify haptics, **F3** on the PC for the debug overlay (FPS, RTT per phone, packets/s, live gyro/accel/quat graphs — plus a ball-telemetry line whenever a ball is in play), **ESC** to pause.
+7. In the PC debug view: left half = P1, right half = P2. Unconnected halves show a scripted **DEMO** racket. Press **Test buzz** in the lobby to verify haptics, **F3** on the PC for the debug overlay (FPS, RTT per phone, packets/s, live gyro/accel/quat graphs, a HAND line per player while hand-motion positioning is on, plus a ball-telemetry line whenever a ball is in play), **ESC** to pause.
 
 ## Match mode (2 Players)
 
@@ -52,6 +52,23 @@ From the main menu click **2 Players**, fill the lobby with phone(s), then **Sta
 - **Rotation**: serve switches every 2 points, and every point once deuce (10-10) is reached. Rematch swaps the first server.
 - **Score**: first to 11, win by 2. The scoreboard shows a glowing serve dot on the serving side and glows GAME POINT; banners announce DEUCE / GAME POINT / winner; the end screen offers Rematch or Back to lobby.
 - `ESC` pauses (physics halts); the pause quit returns to the lobby. `F3` shows the debug overlay plus match info.
+
+## Hand motion positioning (Stage B)
+
+Settings ▸ **Positioning (per player)** chooses how each racket is positioned:
+
+- **Assist only** (default) — the Phase 3 glide, hand motion off.
+- **Hand motion + assist** — your physical hand drives the racket; while a ball is incoming the assist blends in (how strongly follows Assist strength), so a live rally stays playable while your hand leads.
+- **Hand motion only** — your hand, nothing else.
+
+How it works: gravity is removed from the phone's accelerometer, the result is rotated into the calibrated frame (+x = your left, +y = up, +z = toward the net at the calibration pose) and double-integrated with a leak, a tremor dead zone, a critically damped spring return and a ZUPT stillness snap. Consequences:
+
+- **Holding the phone still accumulates no drift** — after ~0.1 s of stillness the velocity is hard-zeroed and the position relaxes home at the Return-to-center rate (set it to 0 to park the estimate anywhere).
+- A still displaced racket glides back to ready at the Return-to-center rate.
+- Recalibrating re-centres the estimate at the new pose; the touchpad remains a fine adjustment on top; hand motion reaches ~0.85 m sideways / 0.55 m toward the net before clamping (the blade never dips into the table).
+- A live phone swing (smash boost) still applies on top of hand motion.
+
+Phones without a gyroscope (rare) are detected automatically: the game falls back to **tilt-only tracking** (rotation from gravity only, position from a heavier-smoothed accel), shows a "tilt-only" chip on that player's slot and toasts once per phone.
 
 ## Practice mode (ball machine)
 
@@ -80,6 +97,7 @@ Easiest options:
 | Phone | PC |
 |---|---|
 | Rotation (calibrated quaternion) | racket rotation, 1:1 |
+| Hand translation (double-integrated accel, ZUPT stillness snap) | racket position inside the reach zone, when positioning mode is on |
 | Swing (acceleration spike + leaky-integrated velocity peak) | swing event → power (m/s), whoosh + "SWING x.x m/s" popup; hit model lands in Phase 3 |
 | Thumb touchpad | nudges racket position inside the reach zone |
 | Calibrate button | re-baselines the racket (any time) |
@@ -88,7 +106,7 @@ Data path: phone streams a 56-byte binary MOTION frame at up to 100 Hz (quaterni
 
 ## Settings
 
-Quality preset (Low/Medium/High), dynamic resolution (auto pixel-ratio scaling), shadows, post-FX (active Phase 6), volumes, swing sensitivity/threshold, handedness per player, invert axes, **assist strength** (off/low/medium/high — how strongly the game glides your racket to the interception point and shapes your returns into legal rally shots; a live swing always overrides the assist). Persisted in localStorage.
+Quality preset (Low/Medium/High), dynamic resolution (auto pixel-ratio scaling), shadows, post-FX (active Phase 6), volumes, swing sensitivity/threshold, handedness per player, invert axes, **assist strength** (off/low/medium/high — how strongly the game glides your racket to the interception point and shapes your returns into legal rally shots; a live swing always overrides the assist) and **per-player positioning** (mode, hand sensitivity, return-to-center rate, motion dead zone — see *Hand motion positioning*). Persisted in localStorage.
 
 ## Project structure
 
@@ -101,3 +119,5 @@ See `summary.md` for the phase-by-phase log, `client/sports/_template/Sport.js` 
 - **"MOTION: WAIT…"** — you're on plain HTTP (see HTTPS section) or denied the permission prompt.
 - **No sensor data after HTTPS works** — iOS: enable *Motion & Orientation Access*; the page detects this and shows a hint.
 - **Racket mirrored / inverted feel** — Settings → per-player handedness (left/right) and Invert axes.
+- **"tilt-only" chip on a slot** — that phone reports no usable gyroscope; the game falls back to rotation-from-gravity plus a heavier-smoothed hand estimate. Playable, just less crisp hand tracking.
+- **Racket drifts while holding still (hand motion on)** — this is the Stage B regression to watch for: it should never happen. Recalibrate (a drift-while-still means the gravity subtraction is off for your pose); if it persists, check the F3 HAND line — `ZUPT` should light and velocity should read 0.000 within a moment of holding still.

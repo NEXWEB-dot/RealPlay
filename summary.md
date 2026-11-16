@@ -226,5 +226,37 @@ Phone-driven singles match: real scoring/serve rotation on the phone-controlled 
 - **Stranded-rally bug found & fixed** (one natural repro + deterministic closure): the match ball deactivated ~20 ms after a serve launched from `update()` in the same frame `_startServe` ran (held ball never pinned → `solveServe` read the dead ball's stale position), and there was no net for ball-gone-without-events. Fixed: (1) `_startServe` parks the held ball before the first blade pin; (2) rally watchdog in `_matchStep`. Post-fix: 19 points with maxRallyBalllessMs = 0.
 - **Practice regression**: machine visible + auto-running, Space toss works, B toggles, quit-to-menu works. Zero console errors across the whole session.
 
-### Next up — Stage B
-Sensor-only "Hand Motion Positioning": gravity-removed accel rotated by the calibrated orientation, leaky double integration with spring-damper return, ZUPT stillness snap, dead zone + reach clamp, per-player Positioning/Sensitivity/Return/Dead-zone settings, no-gyro tilt fallback, F3 hand-motion debug, estimator in its own module (interface ready for camera fusion).
+## Stage B — Sensor-only "Hand Motion Positioning"
+
+The phone's physical motion now moves the racket POSITION (not just its rotation), estimated purely from the IMU, with zero drift while the hand holds still.
+
+### 1. Estimator (`client/core/handMotion.js`, NEW)
+`HandMotionFilter`: timestamped gravity-removed linear acceleration in → position + velocity out. Frame-agnostic, allocation-free, worker-ready (no THREE import — a tiny internal 3-vector with the same API subset), interface kept stable for Stage C camera fusion.
+
+Pipeline per sample (`update({t,ax,ay,az}, out)`):
+1. **accel low-pass** — tau 45 ms (80 ms on tilt-only devices);
+2. **bias learning while ZUPT-still** (tau 0.4 s) — the residual (gravity leakage + sensor bias) is low-passed out, so "at rest" really means zero accel;
+3. **soft magnitude dead zone** — direction kept, magnitudes below `handDead` scaled to zero, so tremor/noise cannot move the racket;
+4. **leaky double integration** — velocity decays with tau 0.7 s (0.5 s tilt-only), the drift bleed;
+5. **critically damped spring return** toward the neutral pose, rate ω from the Return-to-center setting;
+6. **ZUPT** — 100 ms of corrected accel < 0.55 m/s² latches: velocity hard-zeroed, bias learns, position relaxes home at rate ω. **Holding still accumulates no drift; a still displaced phone glides back to ready** (ω = 0 parks it anywhere). Streams with gaps > 250 ms re-seed instead of integrating across the hole.
+
+### 2. Wiring
+- `input.js`: `RacketInput.hand` struct `{active, pos, vel, accel, raw, zupt, stillMs, noGyro}`; `ControllerInputSource` owns the filter and rotates the device-frame accel by the **calibration baseline** (`a_cal = baseline ⊗ a_dev`), so the estimate lives in the calibrated frame: **+x = player's left, +y = up, +z = toward the net** at the calibration pose. Recalibrating resets the filter to the new neutral. A NO_GYRO flag rising edge switches the estimator to tilt-only tuning (latched for that connection).
+- `TableTennisSport.js`: per-slot `posMode` — `'assist'` (default, exact Phase 3/4 behaviour) | `'motion'` (hand motion, blended toward the assist target only while `assistValid`: `lerp(handTarget, assistTarget, assistStrength)`) | `'motionOnly'` (hand motion only, assist ignored — the return-arc assist still follows the Assist setting). Hand offsets are mirrored for left-handed grips, flipped per slot (P2 stands at the other end) and for invertAxes, scaled by `handSens`, then clamped to `HAND_REACH {x ±0.85, y −0.18…+0.40, z −0.35…+0.55 toward-net}` (the Y floor keeps the blade off the table). The touchpad remains a fine adjustment on top. Filter cfg (`omega`, `dead`) is re-synced from settings every frame. `debugHandInfo(slot)` exposes the full estimator state for E2E + F3.
+- `settings.js`/`screens.js`: per-player **Positioning** section — P1/P2 positioning mode, hand sensitivity (0.4–2×), return-to-center (0–2 rad/s, 0 = park anywhere), motion dead zone (0–1 m/s²).
+- `controller/controller.js` (phone): no-gyro detection (2 s window: `rotationRate` null > 5 frames or exactly-zero > 100 frames) → NO_GYRO flag bit 8 + heavier compass smoothing; tilt-only devices get a secondary gravity estimate (beta/gamma only, 0.25 s low-pass) for the accel subtraction and their compass yaw is frozen at the calibration pose so the baseline stays meaningful. The PC flips the estimator to tauAcc 0.08 / tauVel 0.5, shows a "tilt-only" chip on the slot and one toast per phone.
+- `main.js`/`debugOverlay.js`/`hud.js`: per-slot HAND line on F3 (mode, p/v/F/raw, ZUPT/TILT flags, assist target) + the tilt-only chip/toast.
+
+### 3. Bug found & fixed during E2E
+The dead-zone gate was applied as `multiplyScalar(gate / a)` — `gate` is already a ratio, so the extra division normalized the corrected accel to ≤ 1 m/s² **regardless of input magnitude** (a 2 m/s² push produced 0.9), and near-dead tremor was amplified (0.25 m/s² → 0.2). Fixed to `multiplyScalar(gate)` (output magnitude = `a − dead`); instrumentation confirmed af→2.0, use→1.8 after the fix.
+
+### 4. Verification (prod build on :8080, fake-phone WebSocket at 62.5 Hz, real MOTION frames)
+- **Drift / ZUPT**: +2 m/s² in +x for 1 s, then perfectly still: accel reads 1.8 (dead zone exact), velocity integrates then hard-zeros, ZUPT latches 100 ms into stillness, position decays exponentially 0.088 → 0.055 → 0.015 m and → ~0 — **no drift accumulation while still**. (The automation browser renders at ~8 fps so filter time advances ≈0.39× wall time; at a real 60 fps the same gesture peaks ≈0.5 m and returns to ≈3 mm.)
+- **Blend**: `motionOnly` during a live rally → racket stays hand-driven, assist ignored; `'motion'` + `assistValid` → racket = `lerp(handTarget, assistTarget, 0.75)` verified to ~1 cm (0.567 vs predicted 0.572). With no live ball the hand has full authority (blend correctly skipped).
+- **NO_GYRO**: flag bit 8 → `source.limited`, estimator retuned (tauAcc 0.08, tauVel 0.5), F3/chip "tilt-only", ZUPT still latches; a fresh connection clears it.
+- **Default regression**: `posMode 'assist'` ignores hand motion entirely (racket pinned to the assist path under a sustained 2 m/s² push); demo slots report `debugHandInfo() === null`; settings→filter sync is live (ω 0.8→2.0, dead 0.2→0.4 observed on the running filter).
+- **Serve regression**: a phone SWING_EVENT pulse during serve-wait launches the serve with hand positioning active (launches 100→101, phase → rally) — swing boosts and hand motion coexist. Zero console errors; `npm run smoke` 21/21.
+
+### Next up — Stage C
+Fusion Tracking: webcam ArUco marker tracking in a worker, fused with the IMU hand estimate per player (Kalman), calibration screen, `trackMode` settings, printable `markers.html`, `debugInjectMeasure` E2E.

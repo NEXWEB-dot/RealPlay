@@ -159,7 +159,7 @@ export class HandMotionFilter {
       let a = aErr;
       if (a > 1e-6) {
         const gate = a > c.dead ? 1 - c.dead / a : 0;
-        this._use.multiplyScalar(gate / a);
+        this._use.multiplyScalar(gate);
         a *= gate;
       } else {
         this._use.set(0, 0, 0);
