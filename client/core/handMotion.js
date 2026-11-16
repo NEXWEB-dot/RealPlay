@@ -66,6 +66,18 @@ export class HandMotionFilter {
     this.cfg.tauVel = v ? 0.5 : 0.7;
   }
 
+  /**
+   * Stage C: adopt an external position/velocity estimate (the fusion KF
+   * handover) — integration continues from there instead of gliding home
+   * from zero. Only meaningful while the filter is live (fresh samples);
+   * after a stream gap the next update() re-seeds to neutral, as designed.
+   */
+  adopt(px, py, pz, vx, vy, vz) {
+    this.pos.set(px, py, pz);
+    this.vel.set(vx, vy, vz);
+    this.started = true;
+  }
+
   /** Clear all state — called when the phone recalibrates. */
   reset() {
     this.pos.set(0, 0, 0);

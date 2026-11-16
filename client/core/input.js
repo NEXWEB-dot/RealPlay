@@ -20,6 +20,7 @@
 import * as THREE from 'three';
 import { SyncBuffer, FLAGS } from '../net/sync.js';
 import { HandMotionFilter } from './handMotion.js';
+import { HandFusionFilter } from './tracker/fusionKF.js';
 
 /** Reusable input struct. One instance per racket is allocated once. */
 export class RacketInput {
@@ -42,6 +43,7 @@ export class RacketInput {
       zupt: false,
       stillMs: 0,
       noGyro: false,
+      fused: false,                // Stage C: pos/vel come from the fusion KF
     };
     this.battery = 65535;
     this.latency = 0;
@@ -56,9 +58,18 @@ export class RacketInput {
 const CALIB_CAPTURE_MS = 300;
 
 export class ControllerInputSource {
-  constructor(slot, net) {
+  /**
+   * @param {number} slot 1|2
+   * @param {object} net the NetClient
+   * @param {object} [tracker] the CameraTracker (Stage C fusion source);
+   *   measurements for this slot's marker are routed into the fusion KF.
+   * @param {object} [settings] the Settings singleton (trackMode read here)
+   */
+  constructor(slot, net, tracker, settings) {
     this.slot = slot;
     this.net = net;
+    this.tracker = tracker || null;
+    this.settings = settings || null;
     this.buffer = new SyncBuffer({ delayMs: 45 });
     this.baseline = new THREE.Quaternion();     // calibration pose (world)
     this.hasBaseline = false;
@@ -76,12 +87,44 @@ export class ControllerInputSource {
     this.handFilter = new HandMotionFilter();
     this._handV = new THREE.Vector3(); // scratch: accel rotated to the cal frame
 
+    // Stage C: fusion KF (camera measurements + IMU control input). The
+    // camera tracker pushes measurements for this slot's marker (id slot-1)
+    // into `fuseCameraMeas`; `sample()` predicts at IMU cadence.
+    this.fusion = new HandFusionFilter();
+    this._fusionSub = tracker
+      ? {
+          meas: (m) => this.fuseCameraMeas(m),
+          home: () => {},                    // capture already calls reset()
+          reset: () => this.fusion.reset(),
+        }
+      : null;
+    if (this._fusionSub) tracker.subscribe(slot, this._fusionSub);
+    this._fusionRead = { p: [0, 0, 0], v: [0, 0, 0] }; // KF read scratch
+    this._usingFusion = false;
+    this._fusionLastAge = Infinity;
+
     // Raw newest sample for the debug overlay graphs (shared, no alloc).
     this.latestRaw = {
       t: 0, quat: new THREE.Quaternion(), acc: new THREE.Vector3(),
       gyro: new THREE.Vector3(), swing: 0, flags: 0, battery: 65535,
     };
     this._captureQ = new THREE.Quaternion();
+  }
+
+  /** Detach from the tracker (called when the slot's source is replaced). */
+  dispose() {
+    if (this.tracker && this._fusionSub) {
+      this.tracker.unsubscribe(this.slot, this._fusionSub);
+      this._fusionSub = null;
+    }
+  }
+
+  /**
+   * Stage C: one camera measurement (CALIBRATED frame, epoch-ms t, possibly
+   * late vs the IMU timeline — the KF rewinds and replays).
+   */
+  fuseCameraMeas(m) {
+    this.fusion.fuse(m.t, m.x, m.y, m.z, m.sx, m.sy, m.sz);
   }
 
   /** Incoming decoded MOTION relay (from NetClient). */
@@ -170,8 +213,10 @@ export class ControllerInputSource {
       this.baseline.copy(avg);
       this.hasBaseline = true;
       // A new calibration pose redefines the reference frame: the hand-motion
-      // estimate restarts from the neutral (zero-offset) pose.
+      // estimate restarts from the neutral (zero-offset) pose — and so does
+      // the Stage C fusion KF (its measurements live in the same frame).
       this.handFilter.reset();
+      this.fusion.reset();
     }
   }
 
@@ -206,13 +251,57 @@ export class ControllerInputSource {
         hand,
       );
       hand.active = true;
+      this._applyFusion(nowMs, hand);
     } else {
       hand.pos.set(0, 0, 0);
       hand.vel.set(0, 0, 0);
       hand.accel.set(0, 0, 0);
       hand.zupt = false;
+      hand.fused = false;
+      this._usingFusion = false;
     }
     return true;
+  }
+
+  /**
+   * Stage C: run the fusion KF at IMU cadence — predict with the Stage B
+   * corrected accel as the control input — and, when the marker is fresh
+   * (< 400 ms) and trackMode is 'fusion', replace the hand estimate with the
+   * fused state. On dropout the Stage B filter adopts the last fused state
+   * so the racket never teleports between the two estimators.
+   */
+  _applyFusion(nowMs, hand) {
+    if (!this.tracker || !this.settings) {
+      hand.fused = false;
+      this._usingFusion = false;
+      return;
+    }
+    // Control input: bias-corrected + dead-zoned accel (zero while still —
+    // exactly the "IMU says nothing moved" signal the KF wants).
+    this.fusion.predict(nowMs, hand.accel.x, hand.accel.y, hand.accel.z);
+
+    const fusionMode = this.settings.at('trackMode', this.slot - 1) === 'fusion';
+    const age = this.tracker.lastMeasAgeMs(this.slot);
+    const ok = fusionMode && this.fusion.started && age < 400;
+
+    if (ok) {
+      const f = this.fusion.read(this._fusionRead);
+      hand.pos.set(f.p[0], f.p[1], f.p[2]);
+      hand.vel.set(f.v[0], f.v[1], f.v[2]);
+      hand.fused = true;
+      this._usingFusion = true;
+    } else {
+      hand.fused = false;
+      if (this._usingFusion && this.fusion.started) {
+        // Fusion just dropped out: hand the last fused state to the Stage B
+        // filter — the hand estimate continues where the camera left it.
+        const f = this.fusion.read(this._fusionRead);
+        this.handFilter.adopt(f.p[0], f.p[1], f.p[2], f.v[0], f.v[1], f.v[2]);
+        hand.pos.set(f.p[0], f.p[1], f.p[2]);
+        hand.vel.set(f.v[0], f.v[1], f.v[2]);
+      }
+      this._usingFusion = false;
+    }
   }
 
   slotRtt() {

@@ -15,6 +15,7 @@ import { GameLoop } from './core/loop.js';
 import { ViewportManager } from './core/splitScreen.js';
 import { AudioMgr } from './core/audio.js';
 import { RacketInput, ControllerInputSource, DemoInputSource } from './core/input.js';
+import { CameraTracker } from './core/tracker/cameraTracker.js';
 import { NetClient } from './net/client.js';
 import { Hud } from './ui/hud.js';
 import { Screens } from './ui/screens.js';
@@ -52,6 +53,12 @@ const net = new NetClient({
 });
 
 /* ------------------------------------------------------------------ */
+/* Stage C: webcam marker tracker (fusion positioning source)           */
+/* ------------------------------------------------------------------ */
+
+const tracker = new CameraTracker(settings);
+
+/* ------------------------------------------------------------------ */
 /* Player slots: source (phone / demo / bot) + RacketInput per slot     */
 /* ------------------------------------------------------------------ */
 
@@ -74,19 +81,35 @@ const debugOverlay = new DebugOverlay({
   // Stage B: per-slot hand-motion estimator state for the overlay
   getHandInfo: (slot) => {
     const entry = slots.get(slot);
-    const hf = entry && entry.source && entry.source.handFilter;
-    if (!hf || !hf.started) return null;
+    const src = entry && entry.source;
+    const hf = src && src.handFilter;
     const rig = sport.rackets.get(slot);
+    if (!hf || !hf.started) return null;
+    const input = entry.input;
+    const hand = input && input.hand;
+    const fused = !!(hand && hand.fused);
     return {
-      pos: hf.pos, vel: hf.vel, accel: hf.accel, raw: hf.raw,
+      // When the fusion KF is the active output, show its state (the Stage B
+      // filter keeps integrating underneath and is shown via adopt/fallback).
+      pos: fused ? hand.pos : hf.pos,
+      vel: fused ? hand.vel : hf.vel,
+      accel: hf.accel, raw: hf.raw,
       zupt: hf.zupt, stillMs: hf.stillMs,
-      limited: entry.source.limited,
+      fused,
+      limited: src.limited,
       mode: settings.at('posMode', slot - 1) || 'assist',
       assistValid: rig ? rig.assistValid : false,
       assistTarget: rig ? rig.assistTarget : null,
       racket: rig ? rig.posSmooth : null,
     };
   },
+  // Stage C: per-slot webcam tracking status for the overlay
+  getTrackInfo: (slot) => ({
+    status: tracker.status(slot),
+    ageMs: tracker.lastMeasAgeMs(slot),
+    fps: tracker.fps,
+    hasHome: tracker.hasHome(slot),
+  }),
 });
 
 /* ------------------------------------------------------------------ */
@@ -111,7 +134,8 @@ function refreshSlots() {
     if (connected) {
       if (!(entry.source instanceof ControllerInputSource)) {
         if (entry.source instanceof DemoInputSource) net.registerSource(slot, null);
-        entry.source = new ControllerInputSource(slot, net);
+        if (entry.source && entry.source.dispose) entry.source.dispose();
+        entry.source = new ControllerInputSource(slot, net, tracker, settings);
         net.registerSource(slot, entry.source);
         // 'wait' only on the join transition — the heartbeat lobby refresh
         // (every 2 s) must not stomp the frame loop's live/stale chip.
@@ -120,6 +144,7 @@ function refreshSlots() {
       }
     } else if (!(entry.source instanceof DemoInputSource)) {
       net.registerSource(slot, null);
+      if (entry.source && entry.source.dispose) entry.source.dispose();
       entry.source = new DemoInputSource(slot === 1 ? 0 : Math.PI);
       hud.setSlot(slot, { name: `Player ${slot}`, state: 'demo' });
     }
@@ -139,6 +164,7 @@ const screens = new Screens({
   hud,
   audio,
   net,
+  tracker,
   hooks: {
     onPlay2P: () => {
       state = 'lobby';
@@ -339,7 +365,7 @@ window.addEventListener('focus', () => {
 });
 
 // Debug hook for the overlay/e2e tooling (never used by gameplay).
-window.__RP = { net, slots, sport, state: () => state, settings, hud };
+window.__RP = { net, slots, sport, state: () => state, settings, hud, tracker };
 
 /* ------------------------------------------------------------------ */
 /* Game loop                                                           */

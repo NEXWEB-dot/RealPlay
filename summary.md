@@ -258,5 +258,52 @@ The dead-zone gate was applied as `multiplyScalar(gate / a)` — `gate` is alrea
 - **Default regression**: `posMode 'assist'` ignores hand motion entirely (racket pinned to the assist path under a sustained 2 m/s² push); demo slots report `debugHandInfo() === null`; settings→filter sync is live (ω 0.8→2.0, dead 0.2→0.4 observed on the running filter).
 - **Serve regression**: a phone SWING_EVENT pulse during serve-wait launches the serve with hand positioning active (launches 100→101, phase → rally) — swing boosts and hand motion coexist. Zero console errors; `npm run smoke` 21/21.
 
-### Next up — Stage C
-Fusion Tracking: webcam ArUco marker tracking in a worker, fused with the IMU hand estimate per player (Kalman), calibration screen, `trackMode` settings, printable `markers.html`, `debugInjectMeasure` E2E.
+## Stage C — "Fusion Tracking": webcam ArUco marker + IMU fusion
+
+One webcam watches the play area. Each player tapes a printed ArUco marker (ID 0 = P1, ID 1 = P2) to the BACK of their phone; the webcam sees the marker, the phone streams IMU, and a per-player Kalman filter fuses the absolute camera position with the Stage B hand estimate. The camera kills the two IMU-only weaknesses (position uncertainty at lock-on, drift while moving fast); the IMU carries the estimate between the ~30 Hz camera frames and covers dropouts entirely.
+
+### 1. Detection (`client/core/tracker/`)
+- **Vendored js-aruco2@2.0.0 (MIT)** as ESM in `client/core/tracker/vendor/` (`cv.js`, `aruco.js`, `aruco_4x4_1000.js`, LICENSE) — no npm runtime dependency in the client bundle path. Dictionary **ARUCO_4X4_1000** (markSize 6, τ₂ = 2, 1000 words); bit strings verified: id 0 = `1011010100110010`, id 1 = `0000111110011010` ('1' = white cell, row-major 4×4).
+- `cameraTracker.js`: `requestVideoFrameCallback` capture (33 Hz `setInterval` fallback), **one detection in flight at a time** — the worker's runtime sets the detection rate, the camera never queues. Frame → reusable OffscreenCanvas → `transferToImageBitmap` (zero-copy) → module worker `detectWorker.js` runs the detector and posts `{t, w, h, markers: [{id, cx, cy, side, ham}]}` (`side` = mean edge of the OUTER black quad). Detections < 10 px or non-finite are noise-dropped; a size EMA (τ 120 ms) stabilizes depth; per-marker round FPS.
+- `markerGen.js`: SVG/raster generation from the SAME vendored dictionary — what we print is bit-identical to what the detector reads. `markers.html` (third Vite MPA page): both markers as SVG (viewBox `0 0 8 8` = 1-unit quiet zone + 6-unit black square; width = `camMarkerMm·8/6` mm → 133.33 mm for a 100 mm black square), a 100 mm verification ruler with 9 ticks, and a print checklist (100 % scale, matte, flat). Its mm input shares `camMarkerMm` with the game.
+
+### 2. FOV-free pinhole math (no camera calibration at all)
+A marker of physical side S at depth Z projects to `side_px = f·S/Z` and `(cx − w/2) = f·X/Z`; dividing kills `f`:
+`X = S·(cx/w − ½)/(side_px/w)`, `Y = −S·(cy/h − ½)/(side_px/w)`, `Z = S/(side_px/w)` (S = printed black-square side, settings `camMarkerMm`).
+Position follows from normalized pixel ratios and the printed size alone — no focal length, no FOV, no resolution knowledge. The per-slot **ready-pose home** is stored normalized `{cxn, cyn, sideN}` (settings `camHome`), so it survives reloads and resolution changes.
+Known v1 limitation: a marker tilted θ out of the image plane shrinks ~cos θ, biasing depth high ≈ θ²/2 (≈ 7 % at 30°); lateral x/y is nearly unbiased (quad centroid is centered to 2nd order). Absorbed by the KF depth σ + IMU during swings.
+
+### 3. Frame convention
+Camera frame: X = image right, Y = image up, Z = away from the webcam. `cameraTracker` subtracts the stored home (converted to meters with the same ratio math) and flips depth (`z_cal = −ΔZ`), producing measurements in the **calibrated player frame** (+x = player's left, +y = up, +z = toward the net = toward the webcam) — the same frame the Stage B hand filter lives in. Measurement sigmas scale with depth: `sx = sy = max(0.005, (2.5/w)·S/sideN)` (~2.5 px jitter), `sz = max(0.025, 0.035·z)` (~3.5 %). Timestamps are `Date.now()` at rVFC — the same epoch-ms clock as the game loop's `nowMs`.
+
+### 4. Fusion KF (`client/core/tracker/fusionKF.js`, NEW — `HandFusionFilter`)
+Per axis x/y/z independent: state `[pos, vel]`, control input = the Stage B filter's corrected accel (bias-learned + dead-zoned, so "still" really is zero). `predict()` at IMU cadence (every `ControllerInputSource.sample()`), `fuse()` per camera measurement. Node/worker-safe (no THREE, no DOM) — `npm run test:fusion`.
+- **IMU rewind/replay**: camera frames carry 1–3 frames of pipeline latency while the IMU keeps integrating forward. Every predict checkpoints `{t, pending accel, state, P}` into a preallocated 96-entry ring; a measurement dated `t_m` rewinds to the newest checkpoint ≤ `t_m`, applies the update there, replays all stored inputs after it, and **writes the recomputed states back into the ring** — a second late measurement in the same batch corrects the already-corrected timeline. Replay is deterministic: the test proves it bit-exact vs inline fusion.
+- **3-D outlier gate** (combined innovation vs `gate·√(P00+R)`, gate 4σ) rejects marker swaps / mis-detections as a whole.
+- **Lock-on fixes** (what made E2E 16/16): warm-up (`nMeas < 5`) and re-lock (`_rejStreak ≥ 12`) both BYPASS the gate, widen P00 to ≥ 25·σ², and ZERO the velocity gain K1 — position snaps to the camera, velocity stays with the IMU (a position correction must not invent velocity; the cross-covariance is uninformative at lock-on). The streak resets on accept. Seed path: `p = measurement`, `P00 = max(σ², 0.15²)`, `P11 = 0.2²`.
+- `HandMotionFilter.adopt(px..vz)` (Stage B filter, NEW): when the camera drops out, the Stage B filter ADOPTS the last fused state and keeps integrating — the racket never glides home from zero on a dropout; when the camera returns, the KF warm-up/re-lock re-acquires.
+
+### 5. Wiring
+- `input.js`: `ControllerInputSource(slot, net, tracker, settings)` — subscribes to the tracker's per-slot measurement channel (`fuseCameraMeas → fusion.fuse`), runs `fusion.predict(nowMs, hand.accel)` every sample, and when `trackMode === 'fusion'` && the marker is fresh (`lastMeasAgeMs < 400`) replaces `hand.pos/vel` with the fused state (`hand.fused = true`); otherwise the Stage B filter output stands (post-adopt continuity ≈ cm). Recalibration resets BOTH filters (the origin moved). `dispose()` unsubscribes (source replacement on reconnect).
+- `settings.js`: `trackMode ['imu','imu']` ('imu' | 'fusion' per player), `camDevice ''`, `camMarkerMm 100`, `camHome [null, null]`.
+- `screens.js`: Settings gains per-player **tracking** selects ('Phone motion only' | 'Webcam + phone (fusion)') and a **"Tracking & camera…"** button → full-screen setup card: mirrored live preview + overlay canvas (marker quads colored per player, home crosshairs), device select (enumerateDevices), marker-print-mm field, per-slot **Capture ready pose / Clear** with live status chips, status legend. The preview unmounts to a hidden home on close — the camera KEEPS RUNNING during matches.
+- `main.js`: tracker singleton; `refreshSlots` passes `(slot, net, tracker, settings)` and `dispose()`s replaced sources; `getHandInfo` shows the fused state (amber F3 HAND line `HAND[mode+fusion]`); `getTrackInfo` feeds the F3 TRACK line; `__RP.tracker` E2E/debug hooks (`debugInjectFrame` → real worker path, `debugInjectMeasure` → direct processing path, `captureHome`, `debugState`).
+- `debugOverlay.js`: per-slot **TRACK** line (status TRACK/STALE/LOST/NOCAL/OFF, measurement age, camera fps, home ✓).
+- `TableTennisSport.debugHandInfo`: `fused`, `trackMode` and a full `fusion` snapshot (p/v/nMeas/nRejected/nClamped) for E2E + F3.
+- `package.json`: `js-aruco2` dependency (vendored sources + license kept in-tree), `test:fusion` script; `.gitignore`: `.tmp/`.
+
+### 6. Verification (all green)
+- **Unit**: `npm run test:fusion` **16/16** — static-target convergence (0 rejections), velocity settles to ~0, 2 m/s mover tracking, **replay bit-exact vs inline fusion**, late-measurement correction, outlier rejected + state unchanged, stale measurement clamped to buffer start, gap-clamped integration, seeding. `tests/detector.test.mjs` **2/2** — synthetic 640×480 frame → id 0 at (229.5, 209.5) side 59 px, id 1 at (443.5, 263.5) side 47 px, ham 0 (both markers detected through the vendored detector).
+- **Browser E2E** (prod :8080, fake phone `tests/fakePhone.mjs` streaming 62.5 Hz MOTION with CALIBRATED first 25 packets; marker feed via `__RP.tracker.debugInjectMeasure` at 30 Hz):
+  - **Detector round-trip through the real worker**: rasterized id 0 → center (229.5, 209.5) side 59, id 1 → (443.5, 263.5) side 47, ham 0 — bit-identical to the Node detector run.
+  - **Home capture + lock-on**: p ≈ (0, 0, 0.001) after 37 measurements, **0 rejections**; racket at the ready pose.
+  - **Tracking accuracy**: lateral step cxn 0.50 → 0.62 (12 % of frame ≈ 12 cm at home depth) → fusion `p.x = 0.120` exact, racket followed; depth step sideN 0.10 → 0.11 → `p.z = +0.091` (≈ 9 cm toward the webcam), racket z followed (−1.519).
+  - **Dropout → adopt → re-lock**: feed off → `fused: false` within 400 ms, Stage B adopts with a **9 mm** continuity jump, racket continues seamlessly; feed resumes → warm-up re-lock, back on fusion (`fused: true`, 0 rejections).
+  - **trackMode gating**: 'imu' with the camera STILL FEEDING → `fused: false`, hand-filter output used, KF predicts underneath; 'fusion' → resumes.
+  - **Two players**: second fake phone (slot 2) + independent home + 30 Hz ID-1 feed → P2 fusion `p.x = +0.102` (image right = P2's right), racket x −0.105 (slot-2 mirror), 0 rejections; P1 unaffected.
+  - **markers.html**: 2 SVGs, 133.33 mm for a 100 mm black square, 9 ruler ticks, mm input synced with settings.
+  - `npm run smoke` ALL PASSED; build clean (markers.html + detectWorker chunk); **zero console errors**; settings reset to defaults (`trackMode ['imu','imu']`, `camHome [null, null]`).
+- **Bug found & fixed during E2E**: `_process` referenced `h` after the height param had been renamed `_h` (restored `h`); a first post-reload detection failure was a transient module-worker load race — not reproducible, and production loads the worker inside `start()` before any frames flow.
+
+### Next up — Stage D
+Phase 5 bot opponent ("Player vs Bot" on the menu, currently stubbed), ball-machine + fusion positioning co-tuning, and the second sport (padel/badminton) on the same Sport interface — the fusion/hand stack is sport-agnostic and moves over unchanged.

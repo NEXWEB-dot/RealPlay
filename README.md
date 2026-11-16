@@ -2,7 +2,7 @@
 
 3D table tennis in the browser (Three.js + Vite) with **phones as motion controllers** over a Node.js WebSocket server. Modular core so padel/badminton and bots slot in later.
 
-**Current status: Phase 4 + Stage B complete** — Phase 1 (setup, lobby, phone controller with sensor streaming + calibration, split-screen debug view), Phase 2 (real ball physics at a fixed 240 Hz step: gravity, quadratic drag, Magnus lift, spin-transfer bounces, net + net cord, floor, swept-sphere CCD; ball-machine **practice mode**), Phase 3 (**racket-ball hit model**: swept racket contact at 240 Hz with rubber restitution/friction, sweet-spot falloff, phone-swing smash boost, HIT/SMASH/SWEET/EDGE popups, plus **assisted rallies** — Settings ▸ Assist: off/low/medium/high), Phase 4 (**singles match**: swing to serve, ITTF serve rotation — every 2 points, every point at deuce — bounce-order + volley legality, lets, real scoring with win-by-2, live scoreboard with serve dot and game-point glow, banners, end screen, rematch with server swap) and Stage B (**hand-motion positioning**: the phone's physical motion moves the racket via a leaky double integration + ZUPT stillness snap — holding still never drifts — with per-player positioning modes and an automatic tilt-only fallback for gyro-less phones).
+**Current status: Phase 4 + Stage C complete** — Phase 1 (setup, lobby, phone controller with sensor streaming + calibration, split-screen debug view), Phase 2 (real ball physics at a fixed 240 Hz step: gravity, quadratic drag, Magnus lift, spin-transfer bounces, net + net cord, floor, swept-sphere CCD; ball-machine **practice mode**), Phase 3 (**racket-ball hit model**: swept racket contact at 240 Hz with rubber restitution/friction, sweet-spot falloff, phone-swing smash boost, HIT/SMASH/SWEET/EDGE popups, plus **assisted rallies** — Settings ▸ Assist: off/low/medium/high), Phase 4 (**singles match**: swing to serve, ITTF serve rotation — every 2 points, every point at deuce — bounce-order + volley legality, lets, real scoring with win-by-2, live scoreboard with serve dot and game-point glow, banners, end screen, rematch with server swap), Stage B (**hand-motion positioning**: the phone's physical motion moves the racket via a leaky double integration + ZUPT stillness snap — holding still never drifts — with per-player positioning modes and an automatic tilt-only fallback for gyro-less phones) and Stage C (**webcam fusion tracking**: a printed ArUco marker on the phone back + one webcam, fused with the phone IMU in a per-player Kalman filter with rewind/replay — absolute ~1–2 cm lateral accuracy, dropouts covered by the IMU, no camera calibration needed).
 
 ---
 
@@ -42,7 +42,7 @@ Production mode: everything on `http://<pc-ip>:8080`.
 4. Tap **CALIBRATE** while holding the phone like a racket, screen facing the "opponent". The PC half for that player shows **CALIBRATED ✓** and the racket follows your hand in real time.
 5. Use **FULLSCREEN** on the phone (locks portrait on Android; Wake Lock keeps the screen on).
 6. Player 2 joins the same way (second phone or the same page in another tab).
-7. In the PC debug view: left half = P1, right half = P2. Unconnected halves show a scripted **DEMO** racket. Press **Test buzz** in the lobby to verify haptics, **F3** on the PC for the debug overlay (FPS, RTT per phone, packets/s, live gyro/accel/quat graphs, a HAND line per player while hand-motion positioning is on, plus a ball-telemetry line whenever a ball is in play), **ESC** to pause.
+7. In the PC debug view: left half = P1, right half = P2. Unconnected halves show a scripted **DEMO** racket. Press **Test buzz** in the lobby to verify haptics, **F3** on the PC for the debug overlay (FPS, RTT per phone, packets/s, live gyro/accel/quat graphs, a HAND line per player while hand-motion positioning is on, a TRACK line while webcam fusion tracking is on, plus a ball-telemetry line whenever a ball is in play), **ESC** to pause.
 
 ## Match mode (2 Players)
 
@@ -69,6 +69,25 @@ How it works: gravity is removed from the phone's accelerometer, the result is r
 - A live phone swing (smash boost) still applies on top of hand motion.
 
 Phones without a gyroscope (rare) are detected automatically: the game falls back to **tilt-only tracking** (rotation from gravity only, position from a heavier-smoothed accel), shows a "tilt-only" chip on that player's slot and toasts once per phone.
+
+## Webcam fusion tracking (Stage C)
+
+An optional per-player upgrade of hand positioning: one webcam watches the play area, each player tapes a printed ArUco marker to the **back of their phone** (marker facing the webcam), and a Kalman filter fuses the absolute camera position with the phone IMU. Result: lateral accuracy ~1–2 cm (vs ~10 cm drift-prone IMU-only), depth ~3–5 %, and the camera can vanish for up to ~0.4 s with no visible break — the IMU estimate takes over seamlessly and re-locks when the marker reappears. **No camera calibration**: position is computed from normalized pixel ratios and the printed marker size alone.
+
+### Setup (one webcam total, both players)
+
+1. Open `http://<pc-ip>:8080/markers.html`, print **both** markers at **100 % scale** ("actual size", never fit-to-page), then measure the printed black square with a ruler and enter that size on the tracking screen (default 100 mm — the tracker's depth math depends on the print matching this number).
+2. Settings → **Tracking & camera…** → **Start camera**; point the webcam at the play area from behind/next to the screen (marker should occupy ≥ ~8 % of the frame width during play — closer webcam = better accuracy).
+3. Per player: hold the phone in your **ready pose** (the same pose as calibration), marker facing the webcam → **Capture ready pose**. A crosshair marks the captured home on the preview.
+4. Settings → Positioning → **P1/P2 tracking** → *Webcam + phone (fusion)*. Keep positioning on *Hand motion + assist* or *Hand motion only*.
+5. **One phone** = marker **ID 0**. **Two phones** = ID 0 on P1's phone, **ID 1** on P2's phone, both visible to the one webcam at the same time.
+
+Notes:
+
+- The camera keeps running after you close the tracking screen (it must, during matches).
+- F3 shows a **TRACK** line per player: `TRACK` (locked, < 150 ms old) / `STALE` / `LOST` / `NOCAL` (marker seen, ready pose not captured) / `OFF`, the measurement age and camera fps.
+- Marker tilt slightly biases depth (~7 % at 30° tilt); keep the phone roughly facing the webcam during long rallies. Lateral tracking is unaffected.
+- Statuses in the tracking screen: `track` = locked + home set · `stale/lost` = marker not seen · `nocal` = seen, capture the ready pose.
 
 ## Practice mode (ball machine)
 
@@ -106,7 +125,7 @@ Data path: phone streams a 56-byte binary MOTION frame at up to 100 Hz (quaterni
 
 ## Settings
 
-Quality preset (Low/Medium/High), dynamic resolution (auto pixel-ratio scaling), shadows, post-FX (active Phase 6), volumes, swing sensitivity/threshold, handedness per player, invert axes, **assist strength** (off/low/medium/high — how strongly the game glides your racket to the interception point and shapes your returns into legal rally shots; a live swing always overrides the assist) and **per-player positioning** (mode, hand sensitivity, return-to-center rate, motion dead zone — see *Hand motion positioning*). Persisted in localStorage.
+Quality preset (Low/Medium/High), dynamic resolution (auto pixel-ratio scaling), shadows, post-FX (active Phase 6), volumes, swing sensitivity/threshold, handedness per player, invert axes, **assist strength** (off/low/medium/high — how strongly the game glides your racket to the interception point and shapes your returns into legal rally shots; a live swing always overrides the assist), **per-player positioning** (mode, hand sensitivity, return-to-center rate, motion dead zone — see *Hand motion positioning*) and **per-player tracking** (phone-motion-only vs webcam fusion, plus the Tracking & camera screen — see *Webcam fusion tracking*). Persisted in localStorage.
 
 ## Project structure
 
@@ -120,4 +139,7 @@ See `summary.md` for the phase-by-phase log, `client/sports/_template/Sport.js` 
 - **No sensor data after HTTPS works** — iOS: enable *Motion & Orientation Access*; the page detects this and shows a hint.
 - **Racket mirrored / inverted feel** — Settings → per-player handedness (left/right) and Invert axes.
 - **"tilt-only" chip on a slot** — that phone reports no usable gyroscope; the game falls back to rotation-from-gravity plus a heavier-smoothed hand estimate. Playable, just less crisp hand tracking.
+- **Camera permission denied / no camera found** — the tracking screen shows the error in the status chip; allow camera access (the page needs HTTPS or localhost for `getUserMedia`, same as sensors) or pick another device in the dropdown.
+- **Fusion never locks (`nocal`)** — marker seen but no ready pose captured: press **Capture ready pose** holding your normal ready stance. If the marker isn't seen at all: check lighting/glare, the quiet white border, and that the marker is ≥ ~10 px in the frame (move closer or use a bigger print).
+- **Fusion position sits a bit too far when the phone tilts** — known v1 depth bias from marker foreshortening (~cos θ); keep the phone facing the webcam, or rely on the IMU during fast motion.
 - **Racket drifts while holding still (hand motion on)** — this is the Stage B regression to watch for: it should never happen. Recalibrate (a drift-while-still means the gravity subtraction is off for your pose); if it persists, check the F3 HAND line — `ZUPT` should light and velocity should read 0.000 within a moment of holding still.

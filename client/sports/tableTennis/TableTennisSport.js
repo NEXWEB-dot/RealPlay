@@ -871,8 +871,13 @@ export class TableTennisSport extends Sport {
     const rig = this.rackets.get(slot);
     if (!hf || !hf.started) return null;
     const posMode = this.ctx.settings.at('posMode', slot - 1) || 'assist';
+    const trackMode = this.ctx.settings.at('trackMode', slot - 1) || 'imu';
+    const hand = entry && entry.input && entry.input.hand;
+    const fusion = src && src.fusion;
     return {
-      active: !!(entry && entry.input && entry.input.hand && entry.input.hand.active),
+      active: !!(hand && hand.active),
+      fused: !!(hand && hand.fused),
+      trackMode,
       mode: posMode,
       limited: !!src.limited,
       pos: { x: +hf.pos.x.toFixed(3), y: +hf.pos.y.toFixed(3), z: +hf.pos.z.toFixed(3) },
@@ -882,6 +887,15 @@ export class TableTennisSport extends Sport {
       zupt: hf.zupt,
       stillMs: Math.round(hf.stillMs),
       omega: +hf.cfg.omega.toFixed(2),
+      // Stage C: fusion KF snapshot (positions in the calibrated frame)
+      fusion: fusion ? {
+        started: fusion.started,
+        p: { x: +fusion.p[0].toFixed(3), y: +fusion.p[1].toFixed(3), z: +fusion.p[2].toFixed(3) },
+        v: { x: +fusion.v[0].toFixed(3), y: +fusion.v[1].toFixed(3), z: +fusion.v[2].toFixed(3) },
+        nMeas: fusion.nMeas,
+        nRejected: fusion.nRejected,
+        nClamped: fusion.nClamped,
+      } : null,
       assistValid: rig ? rig.assistValid : false,
       assistTarget: rig ? { x: +rig.assistTarget.x.toFixed(3), y: +rig.assistTarget.y.toFixed(3), z: +rig.assistTarget.z.toFixed(3) } : null,
       racketPos: rig ? { x: +rig.posSmooth.x.toFixed(3), y: +rig.posSmooth.y.toFixed(3), z: +rig.posSmooth.z.toFixed(3) } : null,

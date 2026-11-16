@@ -31,6 +31,7 @@ export default defineConfig(({ mode }) => ({
       input: {
         main: 'index.html',
         controller: 'controller/index.html',
+        markers: 'markers.html',
       },
     },
     chunkSizeWarningLimit: 1500,

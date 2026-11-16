@@ -1,0 +1,110 @@
+<!doctype html>
+<!--
+  REALPLAY Stage C — printable tracking markers.
+  Prints marker ID 0 (P1) and ID 1 (P2) at the exact size configured in the
+  game (Settings → Tracking & camera → marker print size, shared via
+  localStorage), plus a 100 mm verification ruler. Print at 100 % scale
+  ("actual size", no fit-to-page) — the tracker's depth math depends on the
+  printed size matching camMarkerMm.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REALPLAY — tracking markers</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: system-ui, sans-serif; background: #fff; color: #111; margin: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .hint { max-width: 78ch; font: 14px/1.55 system-ui; color: #333; margin: 8px 0 16px; }
+  .sheet { display: flex; gap: 48px; flex-wrap: wrap; align-items: flex-start; }
+  .marker { text-align: center; }
+  .marker svg { display: block; margin: 0 auto; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .label { font: 600 15px system-ui; margin-top: 10px; }
+  .sub { font: 12px system-ui; color: #555; }
+  .rulerbox { font: 12px system-ui; color: #333; }
+  .ruler { width: 100mm; height: 16px; position: relative; margin: 14px 0 4px; }
+  .ruler .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4mm;
+    border-left: 1mm solid #000; border-right: 1mm solid #000; border-bottom: 1mm solid #000;
+    print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .ruler .tick { position: absolute; bottom: 0; width: 1px; height: 3mm; background: #000;
+    print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .ruler .tick.major { height: 4mm; width: 1mm; }
+  .noprint button { font-size: 15px; padding: 8px 18px; margin-right: 10px; cursor: pointer; }
+  .noprint label { font: 14px system-ui; }
+  .noprint input { font-size: 15px; width: 70px; padding: 4px 6px; }
+  @media print {
+    .noprint { display: none !important; }
+    body { margin: 10mm; }
+    .sheet { gap: 20mm; }
+  }
+</style>
+</head>
+<body>
+  <div class="noprint">
+    <h1>REALPLAY tracking markers</h1>
+    <div class="hint">
+      Two players = two markers: <b>ID 0 → P1</b>, <b>ID 1 → P2</b> (ARUCO 4×4, 1000-word dictionary).
+      Tape each marker flat on the <b>back of the phone</b> (screen side away from the webcam) or on the
+      hand, so the webcam behind/next to your screen can see it during play.
+    </div>
+    <div style="margin: 10px 0 18px;">
+      <button id="printBtn">Print</button>
+      <label>Marker black-square size: <input id="mm" type="number" min="30" max="400" step="5"> mm</label>
+      <span style="font:12px system-ui;color:#666;"> — same value as the game's Tracking &amp; camera screen</span>
+    </div>
+  </div>
+
+  <div class="sheet">
+    <div class="marker"><div id="m0"></div><div class="label">MARKER 0 — PLAYER 1</div></div>
+    <div class="marker"><div id="m1"></div><div class="label">MARKER 1 — PLAYER 2</div></div>
+    <div class="rulerbox">
+      <div class="ruler" id="ruler"><div class="bar"></div></div>
+      100 mm — verify with a real ruler after printing
+    </div>
+  </div>
+
+  <div class="hint" style="margin-top:18px">
+    <b>Print checklist</b>
+    <ul style="margin:6px 0 0 18px; padding:0">
+      <li>Print at <b>100 % / actual size</b> — never "fit to page" (that changes the size).</li>
+      <li>Check the ruler below against a real ruler; if it's off, measure the printed black square
+          and enter <i>that</i> size in the game's Tracking &amp; camera screen.</li>
+      <li>Thick, matte, flat surface (no glare, no folds). The white 1-unit quiet zone around each
+          black square is part of the marker — keep it clear.</li>
+      <li>Lamp the play area evenly; avoid pointing a light straight at the marker.</li>
+    </ul>
+  </div>
+
+  <script type="module">
+    import { markerSVG } from '/client/core/tracker/markerGen.js';
+    import { Settings } from '/client/core/settings.js';
+
+    const settings = new Settings();
+    const input = document.getElementById('mm');
+    const draw = () => {
+      const mm = Math.max(30, Math.min(400, parseFloat(input.value) || 100));
+      document.getElementById('m0').innerHTML = markerSVG(0, mm);
+      document.getElementById('m1').innerHTML = markerSVG(1, mm);
+    };
+    input.value = settings.get('camMarkerMm') || 100;
+    input.addEventListener('change', () => {
+      const v = Math.max(30, Math.min(400, parseFloat(input.value) || 100));
+      input.value = v;
+      settings.set('camMarkerMm', v);   // shared with the game's settings
+      draw();
+    });
+    document.getElementById('printBtn').addEventListener('click', () => window.print());
+
+    // verification ruler: ticks every 10 mm
+    const ruler = document.getElementById('ruler');
+    for (let i = 1; i < 10; i++) {
+      const t = document.createElement('div');
+      t.className = 'tick' + (i === 5 ? ' major' : '');
+      t.style.left = i * 10 + 'mm';
+      ruler.appendChild(t);
+    }
+    draw();
+  </script>
+</body>
+</html>

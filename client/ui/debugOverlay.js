@@ -37,12 +37,13 @@ const SERIES = [
 ];
 
 export class DebugOverlay {
-  constructor({ getRendererInfo, getSources, getResScale, getBallInfo, getHandInfo }) {
+  constructor({ getRendererInfo, getSources, getResScale, getBallInfo, getHandInfo, getTrackInfo }) {
     this.getRendererInfo = getRendererInfo;
     this.getSources = getSources;
     this.getResScale = getResScale;
     this.getBallInfo = getBallInfo || null;
     this.getHandInfo = getHandInfo || null;
+    this.getTrackInfo = getTrackInfo || null;
 
     this.el = document.createElement('canvas');
     this.el.id = 'debug-overlay';
@@ -172,15 +173,17 @@ export class DebugOverlay {
 
       // Stage B: hand-motion estimator line — position/velocity in the
       // calibrated frame, filtered + raw accel, ZUPT/tilt flags, and the
-      // assist target the position blends toward.
+      // assist target the position blends toward. Stage C adds the webcam
+      // TRACK line (fusion status + measurement age) below it.
       let handH = 0;
       const hand = this.getHandInfo ? this.getHandInfo(slot) : null;
       if (hand) {
         handH = 14;
         const p = hand.pos, v = hand.vel, a = hand.accel, r = hand.raw;
-        ctx.fillStyle = '#9fe8b7';
+        ctx.fillStyle = hand.fused ? '#ffd98a' : '#9fe8b7';
         ctx.fillText(
-          `HAND[${hand.mode}] p(${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}) ` +
+          `HAND[${hand.mode}${hand.fused ? '+fusion' : ''}] ` +
+          `p(${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}) ` +
           `v(${v.x.toFixed(2)},${v.y.toFixed(2)},${v.z.toFixed(2)}) ` +
           `F(${a.x.toFixed(1)},${a.y.toFixed(1)},${a.z.toFixed(1)}) ` +
           `raw(${r.x.toFixed(1)},${r.y.toFixed(1)},${r.z.toFixed(1)}) ` +
@@ -189,6 +192,18 @@ export class DebugOverlay {
             ? `T(${hand.assistTarget.x.toFixed(2)},${hand.assistTarget.y.toFixed(2)},${hand.assistTarget.z.toFixed(2)})`
             : ''),
           x0, y0 + 10,
+        );
+      }
+      const track = this.getTrackInfo ? this.getTrackInfo(slot) : null;
+      if (track) {
+        handH += 14;
+        const age = isFinite(track.ageMs) ? `${Math.round(track.ageMs)}ms` : '—';
+        ctx.fillStyle = track.status === 'track' ? '#7fe3ff' : '#8b96a8';
+        ctx.fillText(
+          `TRACK ${track.status.toUpperCase().padEnd(6)} age ${age}  ` +
+          `cam ${track.fps ? track.fps.toFixed(0) + 'fps' : 'off'}  ` +
+          `${track.hasHome ? 'home ✓' : 'no home'}`,
+          x0, y0 + (hand ? 24 : 10),
         );
       }
 

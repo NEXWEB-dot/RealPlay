@@ -15,7 +15,8 @@ const $ = (tag, cls, html) => {
 
 export class Screens {
   /**
-   * @param {object} ctx { settings, hud, audio, net, hooks }
+   * @param {object} ctx { settings, hud, audio, net, tracker, hooks }
+   * tracker: the Stage C CameraTracker (for the Tracking setup screen).
    * hooks: { onPlay2P, onPlayPractice, onMachineConfig, onMachineToss,
    *          onStartMatch, onQuitToLobby, onQuitToMenu, onRematch,
    *          onResume, applyGraphics }
@@ -32,7 +33,8 @@ export class Screens {
     this.pauseEl = this._buildPause();
     this.machineEl = this._buildMachinePanel();
     this.matchEndEl = this._buildMatchEnd();
-    for (const el of [this.menuEl, this.lobbyEl, this.settingsEl, this.pauseEl, this.machineEl, this.matchEndEl]) {
+    this.trackingEl = this._buildTracking();
+    for (const el of [this.menuEl, this.lobbyEl, this.settingsEl, this.pauseEl, this.machineEl, this.matchEndEl, this.trackingEl]) {
       this.root.appendChild(el);
     }
 
@@ -41,7 +43,7 @@ export class Screens {
   }
 
   _show(el) {
-    for (const e of [this.menuEl, this.lobbyEl, this.settingsEl, this.pauseEl, this.matchEndEl]) {
+    for (const e of [this.menuEl, this.lobbyEl, this.settingsEl, this.pauseEl, this.matchEndEl, this.trackingEl]) {
       e.classList.toggle('hidden', e !== el);
     }
   }
@@ -324,6 +326,10 @@ export class Screens {
         ['motion', 'Hand motion + assist'],
         ['motionOnly', 'Hand motion only'],
       ]);
+      addSelectAt(`P${slot} tracking`, 'trackMode', i, [
+        ['imu', 'Phone motion only'],
+        ['fusion', 'Webcam + phone (fusion)'],
+      ]);
       addRangeAt(`P${slot} hand sensitivity`, 'handSens', i, 0.4, 2, 0.05, (v) => `${v.toFixed(2)}x`);
       addRangeAt(`P${slot} return-to-center`, 'handReturn', i, 0, 2, 0.05, (v) => (v === 0 ? 'off (park anywhere)' : `${v.toFixed(2)}`));
       addRangeAt(`P${slot} motion dead zone`, 'handDead', i, 0, 1, 0.05, (v) => `${v.toFixed(2)} m/s²`);
@@ -333,6 +339,8 @@ export class Screens {
       'Assist and swing parameters drive the hit model from Phase 3. Hand motion (Stage B) moves the racket with your physical hand: hold the phone still and the position holds (no drift); recalibrating re-centres it. A phone without a gyroscope falls back to tilt-only tracking automatically.');
 
     const actions = $('div', 'lobby-actions');
+    const tracking = $('button', 'btn', 'Tracking & camera…');
+    tracking.addEventListener('click', () => { this.ctx.audio.click(); this.openTracking(); });
     const reset = $('button', 'btn danger', 'Reset defaults');
     reset.addEventListener('click', () => {
       s.reset();
@@ -341,7 +349,7 @@ export class Screens {
     });
     const close = $('button', 'btn primary', 'Done');
     close.addEventListener('click', () => { this.ctx.audio.click(); this.closeSettings(); });
-    actions.append(reset, close);
+    actions.append(tracking, reset, close);
 
     card.append(grid, note, actions);
     el.appendChild(card);
@@ -364,6 +372,231 @@ export class Screens {
 
   closeSettings() {
     this._show(this._prevScreen || this.menuEl);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Tracking setup (Stage C: webcam + marker fusion)                  */
+  /* ---------------------------------------------------------------- */
+
+  _buildTracking() {
+    const el = $('div', 'screen hidden');
+    const card = $('div', 'panel');
+    card.style.maxWidth = 'min(96vw, 980px)';
+    card.appendChild($('h3', 'section', 'TRACKING SETUP'));
+
+    const note = $('div', 'settings-note',
+      'Print the two markers from <a href="/markers.html" target="_blank" style="color:#8cf">/markers.html</a> ' +
+      '(exact size matters — set the mm below to your print), tape one on the BACK of each phone ' +
+      '(facing the webcam), put the webcam behind/next to the screen facing the players, then per player: ' +
+      'hold the phone in your ready pose (same pose as calibration) and press Capture. ' +
+      'Fusion tracking (Settings → P1/P2 tracking) then fuses the webcam marker with the phone IMU.');
+
+    const layout = $('div', 'track-layout');
+    layout.style.cssText = 'display:flex;gap:16px;align-items:stretch;flex-wrap:wrap;margin:10px 0;';
+
+    // ---- preview (video + overlay canvas) ----
+    const previewBox = $('div', 'track-preview');
+    previewBox.style.cssText =
+      'position:relative;flex:1 1 420px;min-width:320px;min-height:280px;background:#000;border-radius:10px;overflow:hidden;';
+    this.trackVideoBox = previewBox;
+    const overlay = document.createElement('canvas');
+    overlay.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
+    previewBox.appendChild(overlay);
+    this.trackOverlay = overlay;
+    this.trackOverlayCtx = overlay.getContext('2d');
+    const statusChip = $('div', 'track-status');
+    statusChip.style.cssText =
+      'position:absolute;left:8px;top:8px;padding:4px 10px;border-radius:8px;background:rgba(0,0,0,.55);' +
+      'font:12px/1.4 monospace;color:#cde;pointer-events:none;white-space:pre;';
+    previewBox.appendChild(statusChip);
+    this.trackStatusEl = statusChip;
+
+    // ---- controls column ----
+    const col = $('div', 'track-controls');
+    col.style.cssText = 'flex:1 1 300px;min-width:280px;display:flex;flex-direction:column;gap:10px;';
+
+    // camera device + start/stop
+    const camRow = $('div', 'row2');
+    this.trackDevSel = $('select');
+    this.trackDevSel.style.flex = '1';
+    this.trackDevSel.addEventListener('change', () => {
+      this.ctx.settings.set('camDevice', this.trackDevSel.value);
+      this._restartCamera();
+    });
+    this.trackStartBtn = $('button', 'btn primary', 'Start camera');
+    this.trackStartBtn.addEventListener('click', () => { this.ctx.audio.click(); this._restartCamera(); });
+    camRow.append(this.trackDevSel, this.trackStartBtn);
+    col.appendChild(camRow);
+
+    // marker size
+    const sizeRow = $('div', 'row2');
+    sizeRow.appendChild($('span', null, 'Marker print size (mm)'));
+    const sizeIn = $('input');
+    sizeIn.type = 'number';
+    sizeIn.min = 30; sizeIn.max = 400; sizeIn.step = 5;
+    sizeIn.value = this.ctx.settings.get('camMarkerMm');
+    sizeIn.style.width = '90px';
+    sizeIn.addEventListener('change', () => {
+      const v = Math.max(30, Math.min(400, parseFloat(sizeIn.value) || 100));
+      sizeIn.value = v;
+      this.ctx.settings.set('camMarkerMm', v);
+    });
+    sizeRow.appendChild(sizeIn);
+    col.appendChild(sizeRow);
+
+    // per-slot rows
+    this.trackSlotRows = [];
+    for (const slot of [1, 2]) {
+      const row = $('div', 'track-slot');
+      row.style.cssText = 'border:1px solid #345;border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;';
+      const head = $('div', 'row2');
+      head.style.justifyContent = 'space-between';
+      head.appendChild($('span', null, `P${slot} — marker ID ${slot - 1}`));
+      const chip = $('span', 'val', 'off');
+      head.appendChild(chip);
+      const btns = $('div', 'row2');
+      btns.style.gap = '8px';
+      const cap = $('button', 'btn small primary', 'Capture ready pose');
+      cap.addEventListener('click', async () => {
+        cap.disabled = true;
+        chip.textContent = 'capturing…';
+        const ok = await this.ctx.tracker.captureHome(slot);
+        cap.disabled = false;
+        chip.textContent = ok ? 'captured ✓' : 'no marker seen';
+        this.ctx.audio.click(ok ? 'good' : 'bad');
+      });
+      const clr = $('button', 'btn small', 'Clear');
+      clr.addEventListener('click', () => {
+        this.ctx.tracker.clearHome(slot);
+        chip.textContent = 'off';
+      });
+      btns.append(cap, clr);
+      row.append(head, btns);
+      col.appendChild(row);
+      this.trackSlotRows.push(chip);
+    }
+
+    col.appendChild($('div', 'settings-note',
+      'Status: track = marker locked + home set · stale/lost = marker not seen · nocal = seen, capture the ready pose. ' +
+      'The camera keeps running after you leave this screen.'));
+    layout.append(previewBox, col);
+    card.append(note, layout);
+
+    const actions = $('div', 'lobby-actions');
+    const back = $('button', 'btn primary', 'Back');
+    back.addEventListener('click', () => { this.ctx.audio.click(); this.closeTracking(); });
+    actions.appendChild(back);
+    card.appendChild(actions);
+
+    el.appendChild(card);
+    return el;
+  }
+
+  openTracking() {
+    this._prevScreen = this.trackingEl.classList.contains('hidden')
+      ? (this.settingsEl.classList.contains('hidden') ? this.menuEl : this.settingsEl)
+      : this._prevScreen;
+    this._show(this.trackingEl);
+    this.ctx.tracker.mountPreview(this.trackVideoBox);
+    this._refreshTrackDevices();
+    if (!this._trackRaf) this._trackLoop();
+  }
+
+  closeTracking() {
+    this.ctx.tracker.mountPreview(null); // back to the hidden home (keeps running)
+    if (this._trackRaf) { cancelAnimationFrame(this._trackRaf); this._trackRaf = 0; }
+    this._show(this._prevScreen || this.menuEl);
+  }
+
+  async _refreshTrackDevices() {
+    const s = this.ctx.settings;
+    const sel = this.trackDevSel;
+    sel.innerHTML = '';
+    const def = $('option', null, 'Default camera');
+    def.value = '';
+    sel.appendChild(def);
+    try {
+      for (const d of await this.ctx.tracker.listDevices()) {
+        if (!d.id) continue;
+        const o = $('option', null, d.label);
+        o.value = d.id;
+        sel.appendChild(o);
+      }
+    } catch { /* labels need permission; the default still works */ }
+    sel.value = s.get('camDevice') || '';
+    if (sel.value !== (s.get('camDevice') || '')) sel.value = '';
+  }
+
+  async _restartCamera() {
+    const t = this.ctx.tracker;
+    t.stop();
+    try {
+      await t.start();
+      this.trackStartBtn.textContent = 'Restart camera';
+      this._refreshTrackDevices();
+    } catch (e) {
+      this.trackStartBtn.textContent = 'Start camera';
+      this.trackStatusEl.textContent = `ERR: ${e.message || e}`;
+    }
+  }
+
+  /** Overlay loop while the tracking screen is visible (~10 Hz is plenty). */
+  _trackLoop() {
+    if (this.trackingEl.classList.contains('hidden')) { this._trackRaf = 0; return; }
+    this._trackRaf = requestAnimationFrame(() => this._trackLoop());
+    const t = this.ctx.tracker;
+    const st = t.debugState();
+
+    // status chip
+    const lines = [
+      `${st.running ? (st.fps.toFixed(1) + ' fps · ' + st.w + '×' + st.h) : 'camera off'}`,
+      st.err ? `ERR: ${st.err}` : '',
+      `P1 ${st.statuses[0]}   P2 ${st.statuses[1]}`,
+    ];
+    this.trackStatusEl.textContent = lines.filter(Boolean).join('\n');
+    for (let i = 0; i < 2; i++) {
+      this.trackSlotRows[i].textContent = `${st.statuses[i]}${st.hasHome[i] ? ' · home ✓' : ''}`;
+    }
+
+    // overlay boxes (marker quads + home crosshairs), mirrored like the video
+    const cv = this.trackOverlay;
+    if (cv.width !== cv.clientWidth || cv.height !== cv.clientHeight) {
+      cv.width = cv.clientWidth || 640;
+      cv.height = cv.clientHeight || 400;
+    }
+    const ctx = this.trackOverlayCtx;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const W = cv.width, H = cv.height;
+    const colors = ['#41e0d0', '#ffb454'];
+    for (let i = 0; i < 2; i++) {
+      const home = this.ctx.settings.get('camHome')[i];
+      if (home) {
+        // home crosshair — remember the preview is mirrored (x -> 1-x)
+        const hx = (1 - home.cxn) * W, hy = home.cyn * H;
+        const r = (home.sideN * W) * 0.7;
+        ctx.strokeStyle = colors[i];
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(hx - r, hy); ctx.lineTo(hx + r, hy);
+        ctx.moveTo(hx, hy - r); ctx.lineTo(hx, hy + r);
+        ctx.stroke();
+      }
+    }
+    for (const m of st.lastMarkers) {
+      const age = Date.now() - m.t;
+      if (age > 500) continue;
+      const side = m.sideN * W;
+      const x = (1 - m.cxn) * W - side / 2;   // mirrored preview
+      const y = m.cyn * H - side / 2;
+      ctx.strokeStyle = colors[m.id] || '#fff';
+      ctx.globalAlpha = age > 150 ? 0.45 : 1;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, side, side);
+      ctx.font = '12px monospace';
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.fillText(`P${m.id + 1}`, x, y - 4);
+      ctx.globalAlpha = 1;
+    }
   }
 
   /* ---------------------------------------------------------------- */

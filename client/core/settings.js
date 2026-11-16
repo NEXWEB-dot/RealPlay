@@ -34,6 +34,16 @@ const DEFAULTS = {
   handSens: [1.0, 1.0],
   handReturn: [0.8, 0.8],
   handDead: [0.2, 0.2],
+  /* Stage C: webcam marker tracking (per player).
+   *   trackMode    'imu' (Stage B hand motion) | 'fusion' (webcam + IMU KF)
+   *   camDevice    preferred webcam deviceId ('' = default camera)
+   *   camMarkerMm  printed marker BLACK-square side in mm (must match print)
+   *   camHome      per-slot ready pose {cxn, cyn, sideN} | null (normalized,
+   *                resolution/fov independent) */
+  trackMode: ['imu', 'imu'],
+  camDevice: '',
+  camMarkerMm: 100,
+  camHome: [null, null],
 };
 
 const KEY = 'realplay.settings.v1';
