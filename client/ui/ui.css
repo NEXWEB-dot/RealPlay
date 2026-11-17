@@ -19,7 +19,7 @@
 #ui > * { pointer-events: auto; }
 #ui .pass { pointer-events: none; }
 
-.screen { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.screen { position: absolute; inset: 0; display: flex; overflow: auto; }
 .hidden { display: none !important; }
 
 /* ---------------- menu ---------------- */
@@ -33,6 +33,9 @@
   max-width: min(92vw, 560px);
   box-shadow: 0 18px 60px rgba(0,0,0,0.55);
   backdrop-filter: blur(10px);
+  /* margin:auto (not align-items:center) keeps a too-tall card scrollable
+     instead of clipping its top and bottom off-screen. */
+  margin: auto;
 }
 
 .logo { font-size: 44px; font-weight: 800; letter-spacing: 3px; line-height: 1; }

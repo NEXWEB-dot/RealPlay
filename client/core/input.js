@@ -368,6 +368,38 @@ export class DemoInputSource {
 }
 
 /* ------------------------------------------------------------------ */
+/* Idle source — an unconnected slot during a REAL match: the racket   */
+/* waits at the ready pose instead of playing by itself                */
+/* ------------------------------------------------------------------ */
+
+export class IdleInputSource {
+  constructor(baseYaw = 0) {
+    this.baseYaw = baseYaw;
+    this._e = new THREE.Euler();
+    this._q = new THREE.Quaternion();
+  }
+
+  sample(_nowMs, out) {
+    this._e.set(0, this.baseYaw, 0, 'YXZ');
+    this._q.setFromEuler(this._e);
+    out.orientation.copy(this._q);
+    out.angularVelocity.set(0, 0, 0);
+    out.linearAcceleration.set(0, 0, 0);
+    out.swingEvent = null;
+    out.touch.x = 0; out.touch.y = 0; out.touch.active = false;
+    out.assistTarget = null;
+    out.hand.active = false;
+    out.battery = 65535;
+    out.latency = 0;
+    out.fresh = true;
+    return true;
+  }
+
+  get label() { return 'idle'; }
+  get isLive() { return true; }
+}
+
+/* ------------------------------------------------------------------ */
 /* Bot source — same interface, brain arrives in Phase 5                */
 /* ------------------------------------------------------------------ */
 

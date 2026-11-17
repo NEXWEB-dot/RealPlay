@@ -307,3 +307,8 @@ Per axis x/y/z independent: state `[pos, vel]`, control input = the Stage B filt
 
 ### Next up — Stage D
 Phase 5 bot opponent ("Player vs Bot" on the menu, currently stubbed), ball-machine + fusion positioning co-tuning, and the second sport (padel/badminton) on the same Sport interface — the fusion/hand stack is sport-agnostic and moves over unchanged.
+
+### Stage C follow-up — first real-device feedback (UX fixes)
+- **Tracking screen clipped off-screen** (card taller than the window, flex-centered → top AND bottom cut, Back unreachable): `.screen` now scrolls and `.menu-card/.panel` use the `margin: auto` pattern (never clips), the tracking card is compact, the camera **auto-starts when the screen opens** (permission prompt fires immediately), and selecting *Webcam + phone (fusion)* in Settings without a running camera shows a hint toast.
+- **"Rackets move on their own"**: unconnected slots during a MATCH now hold a static ready pose (`IdleInputSource`, slot chips show *waiting*) instead of the scripted demo racket playing by itself; the demo remains for practice/menu visuals. Verified: both rackets exactly static (0.0000 m movement over 2 s) in a phoneless match; quit/lobby transitions restore the demo.
+- **Phone sensor UX**: iOS permission-denied now KEEPS the motion gate open with the Settings▸Safari▸Motion & Orientation Access instructions (retryable) instead of silently attaching dead listeners; a 3.5 s no-data watchdog flips the chip to `MOTION: NO DATA` with an "open in Safari/Chrome, not an in-app browser" hint.

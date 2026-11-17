@@ -359,11 +359,17 @@ function startSensorsIfNeeded() {
 }
 
 async function enableMotion() {
+  let denied = false;
   try {
     if (needsOrientationPermission) await DeviceOrientationEvent.requestPermission();
     if (needsMotionPermission) await DeviceMotionEvent.requestPermission();
   } catch {
-    toast('Permission denied — motion will not work');
+    denied = true;
+  }
+  if (denied) {
+    // Keep the gate open so the user can retry after fixing the setting.
+    toast('Permission denied — enable Settings ▸ Safari ▸ Advanced ▸ Motion & Orientation Access, then tap again', 6000);
+    return;
   }
   $('motion-gate').classList.add('hidden');
   attachSensorListeners();
@@ -380,6 +386,15 @@ function attachSensorListeners() {
   screen.addEventListener?.('orientationchange', () => { S.screenAngle = -1; });
   $('sensor-chip').classList.add('on');
   $('sensor-chip').textContent = 'MOTION: WAIT…';
+  // No-data watchdog: HTTPS pages inside in-app browsers (or desktop
+  // "mobile" emulation) silently deliver no motion events. Tell the user
+  // WHY instead of leaving a forever-"WAIT…" chip.
+  setTimeout(() => {
+    if (!S.hasOrient && S.sensorsOn) {
+      $('sensor-chip').textContent = 'MOTION: NO DATA';
+      toast('No sensor data — open this page in Safari (iOS) or Chrome (Android), not inside another app\'s browser', 6000);
+    }
+  }, 3500);
 }
 
 function onDeviceOrientation(e) {

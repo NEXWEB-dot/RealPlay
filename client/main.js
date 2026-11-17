@@ -14,7 +14,7 @@ import { RendererManager } from './core/renderer.js';
 import { GameLoop } from './core/loop.js';
 import { ViewportManager } from './core/splitScreen.js';
 import { AudioMgr } from './core/audio.js';
-import { RacketInput, ControllerInputSource, DemoInputSource } from './core/input.js';
+import { RacketInput, ControllerInputSource, DemoInputSource, IdleInputSource } from './core/input.js';
 import { CameraTracker } from './core/tracker/cameraTracker.js';
 import { NetClient } from './net/client.js';
 import { Hud } from './ui/hud.js';
@@ -142,11 +142,18 @@ function refreshSlots() {
         const s = net.slots.find((x) => x.slot === slot);
         hud.setSlot(slot, { name: s?.name || `P${slot}`, state: 'wait' });
       }
-    } else if (!(entry.source instanceof DemoInputSource)) {
-      net.registerSource(slot, null);
-      if (entry.source && entry.source.dispose) entry.source.dispose();
-      entry.source = new DemoInputSource(slot === 1 ? 0 : Math.PI);
-      hud.setSlot(slot, { name: `Player ${slot}`, state: 'demo' });
+    } else {
+      // Unconnected slot. In a REAL match the racket must NOT play by
+      // itself — park it at the ready pose (idle) and show "waiting".
+      // The scripted demo stays for practice/menu attract visuals.
+      const idle = state === 'match';
+      const want = idle ? IdleInputSource : DemoInputSource;
+      if (!(entry.source instanceof want)) {
+        net.registerSource(slot, null);
+        if (entry.source && entry.source.dispose) entry.source.dispose();
+        entry.source = new want(slot === 1 ? 0 : Math.PI);
+        hud.setSlot(slot, { name: `Player ${slot}`, state: idle ? 'wait' : 'demo' });
+      }
     }
     if (slot > maxYaw) break;
   }

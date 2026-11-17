@@ -326,10 +326,15 @@ export class Screens {
         ['motion', 'Hand motion + assist'],
         ['motionOnly', 'Hand motion only'],
       ]);
-      addSelectAt(`P${slot} tracking`, 'trackMode', i, [
+      const trackSel = addSelectAt(`P${slot} tracking`, 'trackMode', i, [
         ['imu', 'Phone motion only'],
         ['fusion', 'Webcam + phone (fusion)'],
       ]);
+      trackSel.addEventListener('change', () => {
+        if (trackSel.value === 'fusion' && this.ctx.tracker && !this.ctx.tracker.running) {
+          this.ctx.hud.toast('Fusion tracking needs the webcam — open "Tracking & camera…" to start it', 5000);
+        }
+      });
       addRangeAt(`P${slot} hand sensitivity`, 'handSens', i, 0.4, 2, 0.05, (v) => `${v.toFixed(2)}x`);
       addRangeAt(`P${slot} return-to-center`, 'handReturn', i, 0, 2, 0.05, (v) => (v === 0 ? 'off (park anywhere)' : `${v.toFixed(2)}`));
       addRangeAt(`P${slot} motion dead zone`, 'handDead', i, 0, 1, 0.05, (v) => `${v.toFixed(2)} m/s²`);
@@ -381,23 +386,19 @@ export class Screens {
   _buildTracking() {
     const el = $('div', 'screen hidden');
     const card = $('div', 'panel');
-    card.style.maxWidth = 'min(96vw, 980px)';
+    card.style.cssText = 'max-width:min(96vw, 900px);padding:16px 20px;';
     card.appendChild($('h3', 'section', 'TRACKING SETUP'));
 
     const note = $('div', 'settings-note',
-      'Print the two markers from <a href="/markers.html" target="_blank" style="color:#8cf">/markers.html</a> ' +
-      '(exact size matters — set the mm below to your print), tape one on the BACK of each phone ' +
-      '(facing the webcam), put the webcam behind/next to the screen facing the players, then per player: ' +
-      'hold the phone in your ready pose (same pose as calibration) and press Capture. ' +
-      'Fusion tracking (Settings → P1/P2 tracking) then fuses the webcam marker with the phone IMU.');
+      'Print the markers from <a href="/markers.html" target="_blank" style="color:#8cf">/markers.html</a> at 100 % scale, tape one on the BACK of each phone (facing the webcam), then per player: hold the ready pose and press Capture. Statuses: track = locked · stale/lost = not seen · nocal = capture the ready pose. The camera keeps running after you leave this screen.');
 
     const layout = $('div', 'track-layout');
-    layout.style.cssText = 'display:flex;gap:16px;align-items:stretch;flex-wrap:wrap;margin:10px 0;';
+    layout.style.cssText = 'display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;margin:10px 0;';
 
     // ---- preview (video + overlay canvas) ----
     const previewBox = $('div', 'track-preview');
     previewBox.style.cssText =
-      'position:relative;flex:1 1 420px;min-width:320px;min-height:280px;background:#000;border-radius:10px;overflow:hidden;';
+      'position:relative;flex:1 1 400px;min-width:300px;min-height:240px;background:#000;border-radius:10px;overflow:hidden;';
     this.trackVideoBox = previewBox;
     const overlay = document.createElement('canvas');
     overlay.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
@@ -477,8 +478,8 @@ export class Screens {
     }
 
     col.appendChild($('div', 'settings-note',
-      'Status: track = marker locked + home set · stale/lost = marker not seen · nocal = seen, capture the ready pose. ' +
-      'The camera keeps running after you leave this screen.'));
+      'Set P1/P2 tracking to "Webcam + phone (fusion)" in Settings. Marker print size must match the print exactly.'));
+
     layout.append(previewBox, col);
     card.append(note, layout);
 
@@ -499,6 +500,9 @@ export class Screens {
     this._show(this.trackingEl);
     this.ctx.tracker.mountPreview(this.trackVideoBox);
     this._refreshTrackDevices();
+    // Start the camera immediately — the permission prompt fires on open and
+    // the preview goes live without an extra click.
+    if (!this.ctx.tracker.running) this._restartCamera();
     if (!this._trackRaf) this._trackLoop();
   }
 
